@@ -5,6 +5,7 @@
 - **PHP** / **Laravel** — backend
 - **Inertia.js** (`inertiajs/inertia-laravel` + `@inertiajs/react`) — SPA bridge, no separate API
 - **React** + **TypeScript** (strict mode) — frontend
+- **TanStack Query** (`@tanstack/react-query`) — server state management for API calls
 - **Tailwind CSS** (Vite plugin, no config file) — styling
 - **shadcn/ui** — component library (new-york style, lucide icons)
 - **Vite** + `laravel-vite-plugin` — asset bundling
@@ -48,9 +49,15 @@ resources/
       chats/            # chat pages
     components/         # shared React components
     components/ui/      # shadcn/ui components
+    hooks/
+      api/              # TanStack Query hooks (useMutation, useQuery, useInfiniteQuery)
+      ui/               # UI/utility hooks (useAppearance, useMobile, useCurrentUrl, etc.)
+    lib/
+      api.ts            # shared fetch wrapper with CSRF + error handling
+      utils.ts          # general utilities (cn, etc.)
     types/              # shared TypeScript types
     layouts/            # layout components
-    app.tsx             # Inertia bootstrap
+    app.tsx             # Inertia bootstrap + QueryClientProvider
   css/
     app.css             # Tailwind entry point
   views/
@@ -158,40 +165,90 @@ function handleAction() {
 
 The Inertia page props will be refreshed with the new server state once the request completes — no manual state synchronization needed.
 
-### Non-navigating HTTP requests (useHttp)
+### Non-navigating HTTP requests (TanStack Query hooks)
 
-When a component needs to call a backend endpoint **without** triggering an Inertia page visit (e.g. JSON APIs, setup flows, toggles), use `useHttp` from `@inertiajs/react`. Never use raw `fetch()` or `axios` directly.
+All non-navigating API calls (JSON requests that don't trigger an Inertia page visit) must use **TanStack Query** via custom hooks. Never use raw `fetch()` or `axios` directly in components.
 
-`useHttp` provides reactive `data`, `errors`, `processing`, and `response` state — consistent with how `useForm` works but for non-navigating requests.
+#### Hook directory structure
+
+Hooks are organized into subdirectories under `resources/js/hooks/`. **No hook files may live directly in `hooks/`** — every hook must belong to a subdirectory:
+
+- `hooks/api/` — TanStack Query hooks (`useMutation`, `useQuery`, `useInfiniteQuery`) that call backend endpoints
+- `hooks/ui/` — UI/utility hooks (`useAppearance`, `useMobile`, `useCurrentUrl`, etc.)
+
+#### Creating API hooks
+
+Each API hook wraps a single endpoint and lives in its own file. Use the `api()` helper from `@/lib/api` for all fetch calls:
 
 ```tsx
-import { useHttp } from '@inertiajs/react'
+// hooks/api/use-send-message.ts
+import { useMutation } from '@tanstack/react-query';
+import { api } from '@/lib/api';
 
-interface SetupResponse {
-    secret: string
-    qrCode: string
+interface Message {
+    id: number;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    created_at: string;
 }
 
-const form = useHttp<{ code: string }, SetupResponse>('post', '/portal/settings/mfa/confirm', { code: '' })
-
-const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    form.post('/portal/settings/mfa/confirm', {
-        onSuccess: (response) => {
-            // response is typed as SetupResponse
-        },
-    })
+export function useSendMessage(chatId: number) {
+    return useMutation<Message, Error, string>({
+        mutationFn: (content) =>
+            api<Message>(`/api/chats/${chatId}/messages`, {
+                method: 'POST',
+                body: JSON.stringify({ content }),
+            }),
+    });
 }
 ```
 
-Prefer `useHttp` over `useForm` when:
-- The endpoint returns JSON data you need to use (e.g. QR codes, tokens)
-- The request should not trigger a page reload or Inertia visit
-- You need access to the response body
+#### Using hooks in components
 
-Use `router.post()` / `useForm` when:
-- The action should redirect or reload Inertia page props
-- Standard form submissions with server-side validation via `usePage().props.errors`
+Never inline `useMutation` or `useQuery` calls directly in a component. Always import and call the dedicated hook:
+
+```tsx
+import { useSendMessage } from '@/hooks/api/use-send-message';
+
+export default function ChatPage({ chat }) {
+    const sendMessage = useSendMessage(chat.id);
+
+    function handleSubmit(content: string) {
+        sendMessage.mutate(content, {
+            onSuccess: (data) => { /* update local state */ },
+            onError: () => { /* handle error */ },
+        });
+    }
+}
+```
+
+#### When to use TanStack Query vs Inertia router
+
+| Scenario | Tool |
+|----------|------|
+| Page navigation / redirect after action | `router.post()` / `<Link>` (Inertia) |
+| JSON response needed (messages, tokens, data) | `useMutation` / `useQuery` (TanStack Query) |
+| Infinite scroll / pagination | `useInfiniteQuery` (TanStack Query) |
+| Creating a new resource with redirect to its page | `<Link method="post">` (Inertia) |
+
+#### API utility (`lib/api.ts`)
+
+The `api()` function handles CSRF tokens, JSON headers, and error parsing. All API hooks must use it — never call `fetch()` directly:
+
+```tsx
+import { api } from '@/lib/api';
+
+// GET
+const data = await api<ResponseType>('/api/endpoint');
+
+// POST
+const result = await api<ResponseType>('/api/endpoint', {
+    method: 'POST',
+    body: JSON.stringify({ key: 'value' }),
+});
+```
+
+On non-2xx responses, `api()` throws an `ApiError` with `status`, `message`, and `data` properties.
 
 ### Form errors
 
@@ -571,6 +628,7 @@ Works on static methods, instance methods, and regular functions.
 When a logical UI entity (e.g. a card, list item, filter panel, modal body) takes up a significant number of lines inside a page component, extract it into its own component for readability. Place extracted components in `resources/js/components/` (shared) or co-locate them next to the page file when only used once.
 
 Guidelines:
+- **File size limit:** Frontend files should generally not exceed 500–800 lines of code. When a file grows beyond this, look for logical UI parts that can be extracted into separate components to maintain a clear mental overview for developers.
 - If a self-contained UI block exceeds ~30–40 lines of JSX, it is a candidate for extraction.
 - Name components after the UI concept they represent (e.g. `ArticleCard`, `CategoryFilter`).
 - Keep props explicit and typed — no spreading of large objects without an interface.

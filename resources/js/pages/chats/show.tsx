@@ -1,9 +1,14 @@
-import { Head, router } from '@inertiajs/react';
+import { Head } from '@inertiajs/react';
 import { Loader2, Send } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
+import { useGenerateReply } from '@/hooks/api/use-generate-reply';
+import { useOlderMessages } from '@/hooks/api/use-older-messages';
+import { useSendMessage } from '@/hooks/api/use-send-message';
 import { cn } from '@/lib/utils';
 
 interface Message {
@@ -28,11 +33,13 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [allMessages, setAllMessages] = useState<Message[]>(initialMessages);
     const [hasMore, setHasMore] = useState(initialHasMore);
-    const [loadingOlder, setLoadingOlder] = useState(false);
     const [input, setInput] = useState('');
-    const [sending, setSending] = useState(false);
-    const [waitingForReply, setWaitingForReply] = useState(false);
     const [shouldScrollToBottom, setShouldScrollToBottom] = useState(true);
+    const replyAttemptedRef = useRef(false);
+
+    const sendMessage = useSendMessage(chat.id);
+    const generateReply = useGenerateReply(chat.id);
+    const olderMessages = useOlderMessages(chat.id, allMessages[0]?.id ?? null);
 
     useEffect(() => {
         setAllMessages(initialMessages);
@@ -43,28 +50,48 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
         if (shouldScrollToBottom) {
             messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
-    }, [allMessages, waitingForReply, shouldScrollToBottom]);
+    }, [allMessages, generateReply.isPending, shouldScrollToBottom]);
 
     useEffect(() => {
         const lastMessage = allMessages[allMessages.length - 1];
-        const needsReply = lastMessage?.role === 'user' && !waitingForReply && !sending;
+        const needsReply = lastMessage?.role === 'user' && !generateReply.isPending && !sendMessage.isPending;
 
-        if (needsReply) {
-            fetchReply();
+        if (needsReply && !replyAttemptedRef.current) {
+            replyAttemptedRef.current = true;
+            generateReply.mutate(undefined, {
+                onSuccess: (data) => {
+                    setAllMessages((prev) => [...prev, data]);
+                },
+                onError: () => {
+                    setAllMessages((prev) => [
+                        ...prev,
+                        {
+                            id: Date.now(),
+                            role: 'assistant' as const,
+                            content: 'Er ging iets mis bij het genereren van een antwoord. Probeer het opnieuw.',
+                            created_at: new Date().toISOString(),
+                        },
+                    ]);
+                },
+            });
         }
-    }, [allMessages]);
+
+        if (lastMessage?.role === 'assistant') {
+            replyAttemptedRef.current = false;
+        }
+    }, [allMessages, generateReply.isPending, sendMessage.isPending]);
 
     const handleScroll = useCallback(() => {
         const container = scrollContainerRef.current;
 
-        if (!container || loadingOlder || !hasMore) {
+        if (!container || olderMessages.isFetching || !hasMore) {
             return;
         }
 
         if (container.scrollTop < 100) {
             loadOlderMessages();
         }
-    }, [loadingOlder, hasMore]);
+    }, [olderMessages.isFetching, hasMore]);
 
     function loadOlderMessages() {
         const oldestMessage = allMessages[0];
@@ -73,72 +100,48 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
             return;
         }
 
-        setLoadingOlder(true);
         setShouldScrollToBottom(false);
 
         const container = scrollContainerRef.current;
         const previousScrollHeight = container?.scrollHeight ?? 0;
 
-        fetch(`/api/chats/${chat.id}/messages?before=${oldestMessage.id}`, {
-            headers: { 'Accept': 'application/json' },
-        })
-            .then((res) => res.json())
-            .then((data) => {
-                setAllMessages((prev) => [...data.messages, ...prev]);
-                setHasMore(data.hasMore);
+        olderMessages.fetchNextPage().then((result) => {
+            const page = result.data?.pages[result.data.pages.length - 1];
+
+            if (page) {
+                setAllMessages((prev) => [...page.messages, ...prev]);
+                setHasMore(page.hasMore);
 
                 requestAnimationFrame(() => {
                     if (container) {
                         container.scrollTop = container.scrollHeight - previousScrollHeight;
                     }
-
                     setShouldScrollToBottom(true);
                 });
-            })
-            .finally(() => {
-                setLoadingOlder(false);
-            });
-    }
-
-    function fetchReply() {
-        setWaitingForReply(true);
-        setShouldScrollToBottom(true);
-
-        fetch(`/api/chats/${chat.id}/generate-reply`, {
-            method: 'POST',
-            headers: {
-                'X-XSRF-TOKEN': getCsrfToken(),
-                'Accept': 'application/json',
-            },
-        })
-            .then((res) => res.json())
-            .then(() => {
-                router.reload({ only: ['messages'] });
-            })
-            .finally(() => {
-                setWaitingForReply(false);
-            });
+            }
+        });
     }
 
     function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
 
-        if (!input.trim() || sending) {
+        if (!input.trim() || sendMessage.isPending) {
             return;
         }
 
-        setSending(true);
+        const content = input.trim();
         setShouldScrollToBottom(true);
-        router.post(
-            `/api/chats/${chat.id}/messages`,
-            { content: input.trim() },
-            {
-                onFinish: () => {
-                    setSending(false);
-                    setInput('');
-                },
+        setInput('');
+
+        sendMessage.mutate(content, {
+            onSuccess: (data) => {
+                replyAttemptedRef.current = false;
+                setAllMessages((prev) => [...prev, data]);
             },
-        );
+            onError: () => {
+                setInput(content);
+            },
+        });
     }
 
     return (
@@ -151,7 +154,7 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                     className="min-h-0 flex-1 overflow-y-auto p-4"
                 >
                     <div className="mx-auto max-w-3xl space-y-4">
-                        {loadingOlder && (
+                        {olderMessages.isFetching && (
                             <div className="flex justify-center py-2">
                                 <Loader2 className="size-5 animate-spin text-muted-foreground" />
                             </div>
@@ -161,7 +164,7 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                                 Begin van het gesprek
                             </p>
                         )}
-                        {allMessages.length === 0 && !waitingForReply && (
+                        {allMessages.length === 0 && !generateReply.isPending && (
                             <div className="flex h-full items-center justify-center py-20">
                                 <p className="text-muted-foreground">
                                     Start een gesprek door een bericht te
@@ -187,13 +190,21 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                                             : 'bg-muted',
                                     )}
                                 >
-                                    <p className="whitespace-pre-wrap text-sm">
-                                        {message.content}
-                                    </p>
+                                    {message.role === 'user' ? (
+                                        <p className="whitespace-pre-wrap text-sm">
+                                            {message.content}
+                                        </p>
+                                    ) : (
+                                        <div className="prose prose-sm dark:prose-invert max-w-none">
+                                            <Markdown remarkPlugins={[remarkGfm]}>
+                                                {message.content}
+                                            </Markdown>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         ))}
-                        {waitingForReply && (
+                        {generateReply.isPending && (
                             <div className="flex justify-start">
                                 <div className="max-w-[80%] rounded-xl bg-muted px-4 py-2">
                                     <TypingIndicator />
@@ -215,15 +226,15 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                             placeholder="Typ een bericht..."
                             autoComplete="off"
                             autoFocus
-                            disabled={sending || waitingForReply}
+                            disabled={sendMessage.isPending || generateReply.isPending}
                             className="flex-1"
                         />
                         <Button
                             type="submit"
                             size="icon"
-                            disabled={sending || waitingForReply}
+                            disabled={sendMessage.isPending || generateReply.isPending}
                         >
-                            {sending ? (
+                            {sendMessage.isPending ? (
                                 <Spinner />
                             ) : (
                                 <Send className="size-4" />
@@ -244,12 +255,6 @@ function TypingIndicator() {
             <span className="size-2 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:300ms]" />
         </div>
     );
-}
-
-function getCsrfToken(): string {
-    const match = document.cookie.match(/XSRF-TOKEN=([^;]+)/);
-
-    return match ? decodeURIComponent(match[1]) : '';
 }
 
 ChatShow.layout = {

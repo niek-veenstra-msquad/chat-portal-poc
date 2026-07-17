@@ -25,7 +25,10 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
 } from '@/components/ui/sidebar';
-import { useCurrentUrl } from '@/hooks/use-current-url';
+import { useDeleteChat } from '@/hooks/api/use-delete-chat';
+import { useRenameChat } from '@/hooks/api/use-rename-chat';
+import { useTogglePin } from '@/hooks/api/use-toggle-pin';
+import { useCurrentUrl } from '@/hooks/ui/use-current-url';
 
 interface ChatListItem {
     id: number;
@@ -39,6 +42,10 @@ export function NavChats() {
     const [editingId, setEditingId] = useState<number | null>(null);
     const [editValue, setEditValue] = useState('');
     const inputRef = useRef<HTMLInputElement>(null);
+
+    const renameChat = useRenameChat();
+    const togglePin = useTogglePin();
+    const deleteChat = useDeleteChat();
 
     useEffect(() => {
         if (editingId !== null && inputRef.current) {
@@ -55,14 +62,20 @@ export function NavChats() {
     function submitRename() {
         if (editingId === null || !editValue.trim()) {
             setEditingId(null);
-
             return;
         }
 
-        router.patch(
-            `/api/chats/${editingId}`,
-            { title: editValue.trim() },
-            { onFinish: () => setEditingId(null) },
+        renameChat.mutate(
+            { chatId: editingId, title: editValue.trim() },
+            {
+                onSuccess: () => {
+                    setEditingId(null);
+                    router.reload();
+                },
+                onError: () => {
+                    setEditingId(null);
+                },
+            },
         );
     }
 
@@ -148,9 +161,9 @@ export function NavChats() {
                                             </DropdownMenuItem>
                                             <DropdownMenuItem
                                                 onClick={() =>
-                                                    router.post(
-                                                        `/api/chats/${chat.id}/toggle-pin`,
-                                                    )
+                                                    togglePin.mutate(chat.id, {
+                                                        onSuccess: () => router.reload(),
+                                                    })
                                                 }
                                             >
                                                 {chat.pinned ? (
@@ -168,9 +181,9 @@ export function NavChats() {
                                             <DropdownMenuItem
                                                 className="text-destructive"
                                                 onClick={() =>
-                                                    router.delete(
-                                                        `/api/chats/${chat.id}`,
-                                                    )
+                                                    deleteChat.mutate(chat.id, {
+                                                        onSuccess: () => router.reload(),
+                                                    })
                                                 }
                                             >
                                                 <Trash2 className="mr-2 size-4" />

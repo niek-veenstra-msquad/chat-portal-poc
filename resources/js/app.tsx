@@ -1,12 +1,22 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createInertiaApp } from '@inertiajs/react';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { initializeTheme } from '@/hooks/use-appearance';
+import { initializeTheme } from '@/hooks/ui/use-appearance';
 import AppLayout from '@/layouts/app-layout';
 import AuthLayout from '@/layouts/auth-layout';
 import SettingsLayout from '@/layouts/settings/layout';
 
 const appName = import.meta.env.VITE_APP_NAME || 'Laravel';
+
+const queryClient = new QueryClient({
+    defaultOptions: {
+        queries: {
+            staleTime: 1000 * 60,
+            retry: 1,
+        },
+    },
+});
 
 createInertiaApp({
     title: (title) => (title ? `${title} - ${appName}` : appName),
@@ -25,10 +35,12 @@ createInertiaApp({
     strictMode: true,
     withApp(app) {
         return (
-            <TooltipProvider delayDuration={0}>
-                {app}
-                <Toaster />
-            </TooltipProvider>
+            <QueryClientProvider client={queryClient}>
+                <TooltipProvider delayDuration={0}>
+                    {app}
+                    <Toaster />
+                </TooltipProvider>
+            </QueryClientProvider>
         );
     },
     progress: {

@@ -17,12 +17,15 @@ class ChatController extends Controller
     {
         abort_unless($chat->user_id === auth()->id(), 403);
 
-        $messages = $chat->messages()
+        $latestIds = $chat->messages()
             ->latest('id')
             ->take(self::MESSAGES_PER_PAGE)
-            ->get()
-            ->reverse()
-            ->values();
+            ->pluck('id');
+
+        $messages = $chat->messages()
+            ->whereIn('id', $latestIds)
+            ->oldest('id')
+            ->get();
 
         return Inertia::render('chats/show', [
             'chat' => ChatData::fromModel($chat),

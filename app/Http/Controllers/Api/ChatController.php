@@ -33,7 +33,7 @@ class ChatController extends Controller
         return redirect()->route('chats.show', $chat);
     }
 
-    public function update(UpdateChatRequest $request, Chat $chat): RedirectResponse
+    public function update(UpdateChatRequest $request, Chat $chat): JsonResponse
     {
         $validated = $request->validated();
 
@@ -41,19 +41,24 @@ class ChatController extends Controller
             'title' => $validated['title'],
         ]);
 
-        return redirect()->back();
+        return response()->json(['success' => true]);
     }
 
-    public function sendMessage(SendMessageRequest $request, Chat $chat): RedirectResponse
+    public function sendMessage(SendMessageRequest $request, Chat $chat): JsonResponse
     {
         $validated = $request->validated();
 
-        $chat->messages()->create([
+        $message = $chat->messages()->create([
             'role' => 'user',
             'content' => $validated['content'],
         ]);
 
-        return redirect()->route('chats.show', $chat);
+        return response()->json([
+            'id' => $message->id,
+            'role' => $message->role,
+            'content' => $message->content,
+            'created_at' => $message->created_at->toISOString(),
+        ]);
     }
 
     public function generateReply(GenerateReplyRequest $request, Chat $chat): JsonResponse
@@ -82,13 +87,16 @@ class ChatController extends Controller
     {
         $beforeId = (int) $request->validated('before');
 
-        $messages = $chat->messages()
+        $olderIds = $chat->messages()
             ->where('id', '<', $beforeId)
             ->latest('id')
             ->take(50)
+            ->pluck('id');
+
+        $messages = $chat->messages()
+            ->whereIn('id', $olderIds)
+            ->oldest('id')
             ->get()
-            ->reverse()
-            ->values()
             ->map(fn ($msg) => [
                 'id' => $msg->id,
                 'role' => $msg->role,
@@ -106,19 +114,19 @@ class ChatController extends Controller
         ]);
     }
 
-    public function destroy(DeleteChatRequest $request, Chat $chat): RedirectResponse
+    public function destroy(DeleteChatRequest $request, Chat $chat): JsonResponse
     {
         $chat->delete();
 
-        return redirect()->route('dashboard');
+        return response()->json(['success' => true]);
     }
 
-    public function togglePin(TogglePinRequest $request, Chat $chat): RedirectResponse
+    public function togglePin(TogglePinRequest $request, Chat $chat): JsonResponse
     {
         $chat->update([
             'pinned_at' => $chat->pinned_at ? null : now(),
         ]);
 
-        return redirect()->back();
+        return response()->json(['success' => true]);
     }
 }
