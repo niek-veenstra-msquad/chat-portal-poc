@@ -1,10 +1,10 @@
 <?php
 
-namespace App\Http\Requests;
+namespace App\Http\Requests\Api;
 
 use Illuminate\Foundation\Http\FormRequest;
 
-class SendMessageRequest extends FormRequest
+class TogglePinRequest extends FormRequest
 {
     public function authorize(): bool
     {
@@ -16,8 +16,6 @@ class SendMessageRequest extends FormRequest
      */
     public function rules(): array
     {
-        return [
-            'content' => ['required', 'string', 'max:10000'],
-        ];
+        return [];
     }
 }

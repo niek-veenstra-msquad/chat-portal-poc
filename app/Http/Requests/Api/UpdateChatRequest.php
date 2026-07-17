@@ -1,14 +1,14 @@
 <?php
 
-namespace App\Http\Requests;
+namespace App\Http\Requests\Api;
 
 use Illuminate\Foundation\Http\FormRequest;
 
-class StoreChatRequest extends FormRequest
+class UpdateChatRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return true;
+        return $this->route('chat')->user_id === $this->user()->id;
     }
 
     /**

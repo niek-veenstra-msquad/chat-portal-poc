@@ -32,10 +32,14 @@ docker compose down     # stop containers
 app/
   DTO/                  # Data Transfer Objects for frontend
   Http/
-    Controllers/        # thin controllers — no business logic
+    Controllers/
+      Api/              # mutation controllers (store, update, delete — no rendering)
+      Web/              # page-rendering controllers (Inertia::render)
     Middleware/
       HandleInertiaRequests.php   # shared Inertia props live here
-    Requests/           # Form Request classes for validation
+    Requests/
+      Api/              # Form Requests for Api controllers
+      Web/              # Form Requests for Web controllers
   Models/               # Eloquent models
   Services/             # Services for external integrations (Ollama, etc.)
 resources/
@@ -52,7 +56,8 @@ resources/
   views/
     app.blade.php       # single Blade root template
 routes/
-  web.php               # all routes (no api.php used)
+  web.php               # page-rendering routes (Web controllers)
+  api.php               # mutation routes (Api controllers, /api/ prefix)
 docker-compose.yml      # PostgreSQL + Ollama containers
 ```
 
@@ -133,6 +138,25 @@ router.post('/login', { email, password }, { onFinish: () => setSubmitting(false
 // logout
 router.post('/logout')
 ```
+
+### API mutations (non-page-rendering requests)
+
+API controllers (`App\Http\Controllers\Api`) handle data mutations (create, update, delete, toggle) and return `redirect()->back()` or `redirect()->route(...)`. These cause Inertia to re-fetch the current page's props — the UI updates automatically after the server responds.
+
+**Convention: always wait for the response before reflecting changes in the UI.** Never optimistically update local state. Use `router.post()`, `router.patch()`, or `router.delete()` with `onFinish` callbacks to manage loading states:
+
+```tsx
+const [processing, setProcessing] = useState(false);
+
+function handleAction() {
+    setProcessing(true);
+    router.patch(`/chats/${chat.id}`, { title: newTitle }, {
+        onFinish: () => setProcessing(false),
+    });
+}
+```
+
+The Inertia page props will be refreshed with the new server state once the request completes — no manual state synchronization needed.
 
 ### Non-navigating HTTP requests (useHttp)
 
@@ -409,11 +433,20 @@ public function login(LoginRequest $request)
 
 ### Form Requests
 
-Controller actions that accept user input or need request-specific authorization must receive a custom `FormRequest` as their first argument — never the base `Illuminate\Http\Request`. Form Requests live in `app/Http/Requests/`, are named `<Action>Request` (e.g. `LoginRequest`, `InviteUserRequest`), and own all validation rules so controllers stay free of inline `$request->validate([...])` calls. Read validated input with `$request->validated()`.
+Controller actions that accept user input or need request-specific authorization must receive a custom `FormRequest` as their first argument — never the base `Illuminate\Http\Request`. Form Requests own all validation rules so controllers stay free of inline `$request->validate([...])` calls. Read validated input with `$request->validated()`.
+
+Form Requests are organized by controller type:
+
+- `app/Http/Requests/Api/` — requests for API controllers (mutations: store, update, delete)
+- `app/Http/Requests/Web/` — requests for Web controllers (page rendering with validated query params)
+
+If a request is shared between both Api and Web controllers, place it in the root `app/Http/Requests/` directory. Prefer duplication over premature abstraction — only share a request when the rules are truly identical.
 
 ```php
-// app/Http/Requests/InviteUserRequest.php
-class InviteUserRequest extends FormRequest
+// app/Http/Requests/Api/StoreChatRequest.php
+namespace App\Http\Requests\Api;
+
+class StoreChatRequest extends FormRequest
 {
     public function authorize(): bool
     {
@@ -426,11 +459,18 @@ class InviteUserRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'voornaam' => ['required', 'string', 'max:255'],
-            'email'    => ['required', 'email'],
-            'rechten'  => ['required', 'string', 'in:Beheerder,Gebruiker,Alleen lezen'],
+            'title' => ['required', 'string', 'max:255'],
         ];
     }
+}
+```
+
+For authorization within Form Requests, use `$this->route('model')->user_id === $this->user()->id` to verify ownership:
+
+```php
+public function authorize(): bool
+{
+    return $this->route('chat')->user_id === $this->user()->id;
 }
 ```
 
@@ -438,16 +478,34 @@ class InviteUserRequest extends FormRequest
 
 ### Routes
 
-All routes are in `routes/web.php`. No `api.php` — Inertia handles everything over HTTP with session auth. Group protected routes under `middleware('auth')`:
-Don't render components in web.php use controllers for this.
+Routes are split across two files:
+
+- **`routes/web.php`** — page-rendering routes (GET requests that return `Inertia::render()`). Uses Web controllers.
+- **`routes/api.php`** — mutation routes (POST, PATCH, DELETE). Uses Api controllers. All routes are prefixed with `/api/` automatically.
+
+API routes use the `web` middleware group (session + CSRF) since they are called by Inertia from the same browser session — no tokens needed.
 
 ```php
-Route::middleware('auth')->prefix('portal')->group(function () {
-    Route::get('/', [DashboardController::class, 'index'])->name('portal.dashboard');
+// routes/web.php — page rendering
+Route::middleware(['auth', 'verified'])->group(function () {
+    Route::get('chats/{chat}', [ChatController::class, 'show'])->name('chats.show');
+});
+
+// routes/api.php — mutations
+Route::middleware(['web', 'auth', 'verified'])->group(function () {
+    Route::post('chats', [ChatController::class, 'store'])->name('chats.store');
+    Route::patch('chats/{chat}', [ChatController::class, 'update'])->name('chats.update');
+    Route::delete('chats/{chat}', [ChatController::class, 'destroy'])->name('chats.destroy');
 });
 ```
 
-Name every route.
+Don't render components in `web.php` — use controllers for this. Name every route. Frontend API calls must use the `/api/` prefix:
+
+```tsx
+router.post('/api/chats', { title: 'New chat' })
+router.patch(`/api/chats/${id}`, { title: newTitle })
+router.delete(`/api/chats/${id}`)
+```
 
 ### Models
 
