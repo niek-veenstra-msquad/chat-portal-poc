@@ -25,6 +25,7 @@ import {
     SidebarMenuButton,
     SidebarMenuItem,
 } from '@/components/ui/sidebar';
+import { NewChatDialog } from '@/components/new-chat-dialog';
 import { useDeleteChat } from '@/hooks/api/use-delete-chat';
 import { useRenameChat } from '@/hooks/api/use-rename-chat';
 import { useTogglePin } from '@/hooks/api/use-toggle-pin';
@@ -93,17 +94,12 @@ export function NavChats() {
     return (
         <SidebarGroup className="px-2 py-0">
             <SidebarGroupLabel>Chats</SidebarGroupLabel>
-            <SidebarGroupAction asChild>
-                <Link
-                    href="/api/chats"
-                    method="post"
-                    data={{ title: 'Nieuwe chat' }}
-                    as="button"
-                >
+            <NewChatDialog>
+                <SidebarGroupAction className="top-1.5">
                     <Plus />
                     <span className="sr-only">Nieuwe chat</span>
-                </Link>
-            </SidebarGroupAction>
+                </SidebarGroupAction>
+            </NewChatDialog>
             <SidebarMenu>
                 {chats.map((chat) => {
                     const href = `/chats/${chat.id}`;
@@ -182,7 +178,13 @@ export function NavChats() {
                                                 className="text-destructive"
                                                 onClick={() =>
                                                     deleteChat.mutate(chat.id, {
-                                                        onSuccess: () => router.reload(),
+                                                        onSuccess: () => {
+                                                            if (isCurrentUrl(href)) {
+                                                                router.visit('/');
+                                                            } else {
+                                                                router.reload();
+                                                            }
+                                                        },
                                                     })
                                                 }
                                             >

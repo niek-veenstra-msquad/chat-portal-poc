@@ -4,7 +4,7 @@ namespace App\Http\Requests\Api;
 
 use Illuminate\Foundation\Http\FormRequest;
 
-class StoreChatRequest extends FormRequest
+class PullModelRequest extends FormRequest
 {
     public function authorize(): bool
     {
@@ -17,7 +17,6 @@ class StoreChatRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'title' => ['required', 'string', 'max:255'],
             'model' => ['required', 'string', 'max:255'],
         ];
     }

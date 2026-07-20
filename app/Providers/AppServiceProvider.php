@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\McpClientService;
 use App\Services\OllamaService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Date;
@@ -14,6 +15,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(OllamaService::class);
+        $this->app->singleton(McpClientService::class);
     }
 
     public function boot(): void

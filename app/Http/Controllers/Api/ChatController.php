@@ -12,6 +12,7 @@ use App\Http\Requests\Api\TogglePinRequest;
 use App\Http\Requests\Api\UpdateChatRequest;
 use App\Models\Chat;
 use App\Services\OllamaService;
+use App\Services\McpClientService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 
@@ -19,6 +20,7 @@ class ChatController extends Controller
 {
     public function __construct(
         private readonly OllamaService $ollama,
+        private readonly McpClientService $mcp,
     ) {}
 
     public function store(StoreChatRequest $request): RedirectResponse
@@ -27,7 +29,7 @@ class ChatController extends Controller
 
         $chat = $request->user()->chats()->create([
             'title' => $validated['title'],
-            'model' => config('services.ollama.model'),
+            'model' => $validated['model'],
         ]);
 
         return redirect()->route('chats.show', $chat);
@@ -63,16 +65,46 @@ class ChatController extends Controller
 
     public function generateReply(GenerateReplyRequest $request, Chat $chat): JsonResponse
     {
+        set_time_limit(300);
+
         $history = $chat->messages()
             ->get(['role', 'content'])
             ->map(fn ($msg) => ['role' => $msg->role, 'content' => $msg->content])
             ->toArray();
 
-        $response = $this->ollama->chat($history, $chat->model);
+        $mcpTools = $this->mcp->getAvailableTools();
+        $ollamaTools = $this->mcp->toOllamaTools($mcpTools);
+
+        $response = $this->ollama->chat($history, $chat->model, $ollamaTools);
+
+        $maxIterations = 10;
+        $iteration = 0;
+
+        while (isset($response['message']['tool_calls']) && $iteration < $maxIterations) {
+            $iteration++;
+
+            $history[] = $response['message'];
+
+            foreach ($response['message']['tool_calls'] as $toolCall) {
+                $toolName = $toolCall['function']['name'] ?? '';
+                $toolArgs = $toolCall['function']['arguments'] ?? [];
+
+                $toolResult = $this->mcp->callTool($toolName, $toolArgs);
+
+                $history[] = [
+                    'role' => 'tool',
+                    'content' => $toolResult['result'] ?? $toolResult['error'] ?? 'No result',
+                ];
+            }
+
+            $response = $this->ollama->chat($history, $chat->model, $ollamaTools);
+        }
+
+        $content = $response['message']['content'] ?? 'Geen antwoord ontvangen.';
 
         $message = $chat->messages()->create([
             'role' => 'assistant',
-            'content' => $response['message']['content'] ?? 'Geen antwoord ontvangen.',
+            'content' => $content,
         ]);
 
         return response()->json([
