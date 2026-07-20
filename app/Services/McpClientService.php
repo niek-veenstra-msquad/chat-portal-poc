@@ -3,8 +3,11 @@
 namespace App\Services;
 
 use App\Models\McpServer;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Mcp\Client;
+use Mcp\Client\Transport\HttpTransport;
+use Mcp\Client\Transport\StdioTransport;
+use Mcp\Schema\Content\TextContent;
 
 class McpClientService
 {
@@ -18,15 +21,22 @@ class McpClientService
 
         foreach ($servers as $server) {
             try {
-                $serverTools = $this->listTools($server);
-                foreach ($serverTools as $tool) {
+                $client = $this->createClient();
+                $transport = $this->createTransport($server);
+                $client->connect($transport);
+
+                $result = $client->listTools();
+
+                foreach ($result->tools as $tool) {
                     $tools[] = [
-                        'name' => $tool['name'],
-                        'description' => $tool['description'] ?? '',
-                        'parameters' => $tool['inputSchema'] ?? ['type' => 'object', 'properties' => new \stdClass()],
+                        'name' => $tool->name,
+                        'description' => $tool->description ?? '',
+                        'parameters' => $tool->inputSchema,
                         'server_id' => $server->id,
                     ];
                 }
+
+                $client->disconnect();
             } catch (\Exception $e) {
                 Log::warning("Failed to list tools from MCP server [{$server->name}]: {$e->getMessage()}");
             }
@@ -44,12 +54,43 @@ class McpClientService
 
         foreach ($servers as $server) {
             try {
-                $serverTools = $this->listTools($server);
-                $toolExists = collect($serverTools)->contains('name', $toolName);
+                $client = $this->createClient();
+                $transport = $this->createTransport($server);
+                $client->connect($transport);
 
-                if ($toolExists) {
-                    return $this->executeTool($server, $toolName, $arguments);
+                $toolsList = $client->listTools();
+                $toolExists = false;
+
+                foreach ($toolsList->tools as $tool) {
+                    if ($tool->name === $toolName) {
+                        $toolExists = true;
+                        break;
+                    }
                 }
+
+                if (! $toolExists) {
+                    $client->disconnect();
+                    continue;
+                }
+
+                $result = $client->callTool($toolName, $arguments);
+                $client->disconnect();
+
+                if ($result->isError) {
+                    $errorText = collect($result->content)
+                        ->filter(fn ($c) => $c instanceof TextContent)
+                        ->map(fn (TextContent $c) => $c->text)
+                        ->implode("\n");
+
+                    return ['error' => $errorText ?: 'Tool execution failed'];
+                }
+
+                $textParts = collect($result->content)
+                    ->filter(fn ($c) => $c instanceof TextContent)
+                    ->map(fn (TextContent $c) => $c->text)
+                    ->implode("\n");
+
+                return ['result' => $textParts ?: json_encode($result->content)];
             } catch (\Exception $e) {
                 Log::warning("Failed to call tool [{$toolName}] on MCP server [{$server->name}]: {$e->getMessage()}");
             }
@@ -58,164 +99,31 @@ class McpClientService
         return ['error' => "Tool '{$toolName}' not found on any active MCP server."];
     }
 
-    /**
-     * @return array<int, array<string, mixed>>
-     */
-    private function listTools(McpServer $server): array
+    private function createClient(): Client
     {
-        $request = [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'tools/list',
-        ];
-
-        $data = $server->isStdio()
-            ? $this->sendStdio($server, $request)
-            : $this->sendHttp($server, $request);
-
-        return $data['result']['tools'] ?? [];
+        return Client::builder()
+            ->setClientInfo('chat-portal', '1.0.0')
+            ->setInitTimeout(15)
+            ->setRequestTimeout(30)
+            ->build();
     }
 
-    /**
-     * @return array<string, mixed>
-     */
-    private function executeTool(McpServer $server, string $toolName, array $arguments): array
+    private function createTransport(McpServer $server): HttpTransport|StdioTransport
     {
-        $request = [
-            'jsonrpc' => '2.0',
-            'id' => 1,
-            'method' => 'tools/call',
-            'params' => [
-                'name' => $toolName,
-                'arguments' => $arguments,
-            ],
-        ];
+        if ($server->isStdio()) {
+            $parts = explode(' ', $server->command, 2);
+            $command = $parts[0];
+            $args = isset($parts[1]) ? explode(' ', $parts[1]) : [];
 
-        $data = $server->isStdio()
-            ? $this->sendStdio($server, $request, 30)
-            : $this->sendHttp($server, $request, 30);
-
-        if (isset($data['error'])) {
-            return ['error' => $data['error']['message'] ?? 'Unknown MCP error'];
+            return new StdioTransport(
+                command: $command,
+                args: $args,
+            );
         }
 
-        $content = $data['result']['content'] ?? [];
-        $textParts = collect($content)
-            ->where('type', 'text')
-            ->pluck('text')
-            ->implode("\n");
-
-        return ['result' => $textParts ?: json_encode($content)];
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function sendHttp(McpServer $server, array $request, int $timeout = 10): array
-    {
-        $response = Http::timeout($timeout)
-            ->withHeaders([
-                'Content-Type' => 'application/json',
-                'Accept' => 'application/json, text/event-stream',
-            ])
-            ->post($server->url, $request);
-
-        if (! $response->successful()) {
-            throw new \RuntimeException("MCP server responded with status {$response->status()}");
-        }
-
-        return $response->json();
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    private function sendStdio(McpServer $server, array $request, int $timeout = 10): array
-    {
-        $command = $server->command;
-
-        if (! $command) {
-            throw new \RuntimeException("No command configured for stdio MCP server [{$server->name}]");
-        }
-
-        $descriptorspec = [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ];
-
-        $process = proc_open($command, $descriptorspec, $pipes, null, null);
-
-        if (! is_resource($process)) {
-            throw new \RuntimeException("Failed to start MCP stdio process: {$command}");
-        }
-
-        try {
-            $initRequest = json_encode([
-                'jsonrpc' => '2.0',
-                'id' => 0,
-                'method' => 'initialize',
-                'params' => [
-                    'protocolVersion' => '2024-11-05',
-                    'capabilities' => new \stdClass(),
-                    'clientInfo' => [
-                        'name' => 'chat-portal',
-                        'version' => '1.0.0',
-                    ],
-                ],
-            ]);
-
-            fwrite($pipes[0], $initRequest . "\n");
-            $initResponse = $this->readLineWithTimeout($pipes[1], $timeout);
-
-            $notification = json_encode([
-                'jsonrpc' => '2.0',
-                'method' => 'notifications/initialized',
-            ]);
-            fwrite($pipes[0], $notification . "\n");
-
-            $payload = json_encode($request);
-            fwrite($pipes[0], $payload . "\n");
-
-            $responseLine = $this->readLineWithTimeout($pipes[1], $timeout);
-
-            $data = json_decode($responseLine, true);
-
-            if (! is_array($data)) {
-                throw new \RuntimeException("Invalid JSON response from stdio MCP server");
-            }
-
-            return $data;
-        } finally {
-            fclose($pipes[0]);
-            fclose($pipes[1]);
-            fclose($pipes[2]);
-            proc_terminate($process);
-            proc_close($process);
-        }
-    }
-
-    private function readLineWithTimeout($pipe, int $timeout): string
-    {
-        stream_set_blocking($pipe, false);
-        $startTime = time();
-        $buffer = '';
-
-        while ((time() - $startTime) < $timeout) {
-            $chunk = fgets($pipe);
-            if ($chunk !== false) {
-                $buffer .= $chunk;
-                if (str_ends_with(trim($buffer), '}')) {
-                    $decoded = json_decode(trim($buffer), true);
-                    if (is_array($decoded)) {
-                        return trim($buffer);
-                    }
-                }
-            }
-            usleep(10000);
-        }
-
-        throw new \RuntimeException("Timeout waiting for MCP stdio response");
+        return new HttpTransport(
+            endpoint: $server->url,
+        );
     }
 
     /**

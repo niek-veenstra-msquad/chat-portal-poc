@@ -148,26 +148,30 @@ router.post('/logout')
 
 ### API mutations (non-page-rendering requests)
 
-API controllers (`App\Http\Controllers\Api`) handle data mutations (create, update, delete, toggle) and return `redirect()->back()` or `redirect()->route(...)`. These cause Inertia to re-fetch the current page's props — the UI updates automatically after the server responds.
+API controllers (`App\Http\Controllers\Api`) handle data mutations (create, update, delete, toggle) and return JSON responses. The frontend communicates with these endpoints exclusively through **TanStack Query** hooks (`useMutation`). Never use `router.post()`, `router.patch()`, or `router.delete()` for API endpoints — those are Inertia methods that expect redirect responses.
 
-**Convention: always wait for the response before reflecting changes in the UI.** Never optimistically update local state. Use `router.post()`, `router.patch()`, or `router.delete()` with `onFinish` callbacks to manage loading states:
+**Convention: always wait for the response before reflecting changes in the UI.** Never optimistically update local state. After a successful mutation, call `router.reload()` to refresh the Inertia page props with the latest server state:
 
 ```tsx
-const [processing, setProcessing] = useState(false);
+import { router } from '@inertiajs/react';
+import { useUpdateChat } from '@/hooks/api/use-update-chat';
 
-function handleAction() {
-    setProcessing(true);
-    router.patch(`/chats/${chat.id}`, { title: newTitle }, {
-        onFinish: () => setProcessing(false),
-    });
+export default function ChatPage({ chat }) {
+    const updateChat = useUpdateChat(chat.id);
+
+    function handleRename(newTitle: string) {
+        updateChat.mutate({ title: newTitle }, {
+            onSuccess: () => router.reload(),
+        });
+    }
 }
 ```
 
-The Inertia page props will be refreshed with the new server state once the request completes — no manual state synchronization needed.
+**Exception:** Creating a resource that should navigate to its new page can use `<Link method="post">` or `router.post()` with Inertia (the controller returns a redirect in this case). Example: creating a new chat that redirects to `chats.show`.
 
 ### Non-navigating HTTP requests (TanStack Query hooks)
 
-All non-navigating API calls (JSON requests that don't trigger an Inertia page visit) must use **TanStack Query** via custom hooks. Never use raw `fetch()` or `axios` directly in components.
+All API calls to backend endpoints (`/api/*`) that return JSON must use **TanStack Query** via custom hooks. This includes both data fetching (`useQuery`) and mutations (`useMutation`). Never use raw `fetch()`, `axios`, or Inertia's `router.patch()`/`router.delete()` for JSON API endpoints.
 
 #### Hook directory structure
 
@@ -226,10 +230,12 @@ export default function ChatPage({ chat }) {
 
 | Scenario | Tool |
 |----------|------|
-| Page navigation / redirect after action | `router.post()` / `<Link>` (Inertia) |
-| JSON response needed (messages, tokens, data) | `useMutation` / `useQuery` (TanStack Query) |
+| Page navigation / redirect after action | `router.visit()` / `<Link>` (Inertia) |
+| Creating a resource with redirect to its page | `router.post()` / `<Link method="post">` (Inertia) |
+| Data mutations (update, delete, toggle) | `useMutation` (TanStack Query) → `router.reload()` on success |
+| Fetching JSON data from API | `useQuery` (TanStack Query) |
 | Infinite scroll / pagination | `useInfiniteQuery` (TanStack Query) |
-| Creating a new resource with redirect to its page | `<Link method="post">` (Inertia) |
+| Login / logout | `router.post()` (Inertia, session-based) |
 
 #### API utility (`lib/api.ts`)
 
@@ -538,9 +544,9 @@ public function authorize(): bool
 Routes are split across two files:
 
 - **`routes/web.php`** — page-rendering routes (GET requests that return `Inertia::render()`). Uses Web controllers.
-- **`routes/api.php`** — mutation routes (POST, PATCH, DELETE). Uses Api controllers. All routes are prefixed with `/api/` automatically.
+- **`routes/api.php`** — API routes (POST, PATCH, DELETE, GET) that return JSON. Uses Api controllers. All routes are prefixed with `/api/` automatically.
 
-API routes use the `web` middleware group (session + CSRF) since they are called by Inertia from the same browser session — no tokens needed.
+API routes use the `web` middleware group (session + CSRF) since they are called from the same browser session — no tokens needed.
 
 ```php
 // routes/web.php — page rendering
@@ -548,7 +554,7 @@ Route::middleware(['auth', 'verified'])->group(function () {
     Route::get('chats/{chat}', [ChatController::class, 'show'])->name('chats.show');
 });
 
-// routes/api.php — mutations
+// routes/api.php — JSON API (called via TanStack Query hooks)
 Route::middleware(['web', 'auth', 'verified'])->group(function () {
     Route::post('chats', [ChatController::class, 'store'])->name('chats.store');
     Route::patch('chats/{chat}', [ChatController::class, 'update'])->name('chats.update');
@@ -556,12 +562,15 @@ Route::middleware(['web', 'auth', 'verified'])->group(function () {
 });
 ```
 
-Don't render components in `web.php` — use controllers for this. Name every route. Frontend API calls must use the `/api/` prefix:
+Don't render components in `web.php` — use controllers for this. Name every route. Frontend API calls must use the `/api/` prefix and always go through TanStack Query hooks:
 
 ```tsx
-router.post('/api/chats', { title: 'New chat' })
-router.patch(`/api/chats/${id}`, { title: newTitle })
-router.delete(`/api/chats/${id}`)
+// In a hook (hooks/api/use-update-chat.ts)
+api<ResponseType>(`/api/chats/${chatId}`, { method: 'PATCH', body: JSON.stringify({ title }) })
+
+// In a component
+const updateChat = useUpdateChat(chat.id);
+updateChat.mutate({ title: newTitle }, { onSuccess: () => router.reload() });
 ```
 
 ### Models
