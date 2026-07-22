@@ -5,13 +5,14 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 
-#[Fillable(['name', 'type', 'url', 'command', 'description', 'is_active'])]
+#[Fillable(['name', 'type', 'url', 'command', 'args', 'env', 'description', 'is_active'])]
 class McpServer extends Model
 {
     protected function casts(): array
     {
         return [
             'is_active' => 'boolean',
+            'env' => 'array',
         ];
     }
 

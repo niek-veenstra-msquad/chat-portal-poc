@@ -13,6 +13,7 @@ class McpServerController extends Controller
     public function store(StoreMcpServerRequest $request): JsonResponse
     {
         $validated = $request->validated();
+        $validated['env'] = $this->transformEnv($validated['env'] ?? null);
 
         McpServer::create($validated);
 
@@ -22,6 +23,7 @@ class McpServerController extends Controller
     public function update(UpdateMcpServerRequest $request, McpServer $mcpServer): JsonResponse
     {
         $validated = $request->validated();
+        $validated['env'] = $this->transformEnv($validated['env'] ?? null);
 
         $mcpServer->update($validated);
 
@@ -42,5 +44,18 @@ class McpServerController extends Controller
         ]);
 
         return response()->json(['success' => true]);
+    }
+
+    /**
+     * @param  array<int, array{key: string, value: string}>|null  $env
+     * @return array<string, string>|null
+     */
+    private function transformEnv(?array $env): ?array
+    {
+        if (empty($env)) {
+            return null;
+        }
+
+        return collect($env)->pluck('value', 'key')->toArray();
     }
 }

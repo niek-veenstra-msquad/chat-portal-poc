@@ -4,6 +4,10 @@ import { api } from '@/lib/api';
 interface PullStatus {
     status: 'idle' | 'pulling' | 'success' | 'failed';
     message?: string;
+    progress?: number;
+    completed?: number;
+    total?: number;
+    detail?: string;
 }
 
 export function usePullModel() {

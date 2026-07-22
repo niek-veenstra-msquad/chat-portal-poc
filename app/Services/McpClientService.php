@@ -118,6 +118,7 @@ class McpClientService
             return new StdioTransport(
                 command: $command,
                 args: $args,
+                env: $server->env,
             );
         }
 
@@ -139,7 +140,9 @@ class McpClientService
             'function' => [
                 'name' => $tool['name'],
                 'description' => $tool['description'],
-                'parameters' => $tool['parameters'],
+                'parameters' => ! empty($tool['parameters']) && is_array($tool['parameters']) && ! array_is_list($tool['parameters'])
+                    ? $tool['parameters']
+                    : ['type' => 'object', 'properties' => new \stdClass],
             ],
         ], $tools);
     }

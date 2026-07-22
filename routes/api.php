@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\McpServerController;
 use App\Http\Controllers\Api\ModelController;
+use App\Http\Controllers\Api\WidgetController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware(['web', 'auth', 'verified'])->group(function () {
@@ -22,4 +23,6 @@ Route::middleware(['web', 'auth', 'verified'])->group(function () {
     Route::patch('mcp-servers/{mcpServer}', [McpServerController::class, 'update'])->name('mcp-servers.update');
     Route::delete('mcp-servers/{mcpServer}', [McpServerController::class, 'destroy'])->name('mcp-servers.destroy');
     Route::post('mcp-servers/{mcpServer}/toggle-active', [McpServerController::class, 'toggleActive'])->name('mcp-servers.toggle-active');
+
+    Route::patch('widgets/order', [WidgetController::class, 'updateOrder'])->name('widgets.update-order');
 });

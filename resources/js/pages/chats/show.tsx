@@ -1,12 +1,12 @@
 import { Head } from '@inertiajs/react';
-import { Loader2, Send } from 'lucide-react';
+import { Loader2, Send, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
-import { useGenerateReply } from '@/hooks/api/use-generate-reply';
+import { useStreamReply, type ToolCallEvent } from '@/hooks/api/use-generate-reply';
 import { useOlderMessages } from '@/hooks/api/use-older-messages';
 import { useSendMessage } from '@/hooks/api/use-send-message';
 import { cn } from '@/lib/utils';
@@ -38,7 +38,7 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
     const replyAttemptedRef = useRef(false);
 
     const sendMessage = useSendMessage(chat.id);
-    const generateReply = useGenerateReply(chat.id);
+    const stream = useStreamReply(chat.id);
     const olderMessages = useOlderMessages(chat.id, allMessages[0]?.id ?? null);
 
     useEffect(() => {
@@ -50,36 +50,52 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
         if (shouldScrollToBottom) {
             messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
-    }, [allMessages, generateReply.isPending, shouldScrollToBottom]);
+    }, [allMessages, stream.isStreaming, stream.content, shouldScrollToBottom]);
+
+    useEffect(() => {
+        if (stream.messageId && !stream.isStreaming) {
+            setAllMessages((prev) => {
+                if (prev.some((m) => m.id === stream.messageId)) return prev;
+                return [
+                    ...prev,
+                    {
+                        id: stream.messageId!,
+                        role: 'assistant' as const,
+                        content: stream.content,
+                        created_at: stream.createdAt ?? new Date().toISOString(),
+                    },
+                ];
+            });
+        }
+    }, [stream.messageId, stream.isStreaming]);
+
+    useEffect(() => {
+        if (stream.error && !stream.isStreaming) {
+            setAllMessages((prev) => [
+                ...prev,
+                {
+                    id: Date.now(),
+                    role: 'assistant' as const,
+                    content: stream.error!,
+                    created_at: new Date().toISOString(),
+                },
+            ]);
+        }
+    }, [stream.error, stream.isStreaming]);
 
     useEffect(() => {
         const lastMessage = allMessages[allMessages.length - 1];
-        const needsReply = lastMessage?.role === 'user' && !generateReply.isPending && !sendMessage.isPending;
+        const needsReply = lastMessage?.role === 'user' && !stream.isStreaming && !sendMessage.isPending;
 
         if (needsReply && !replyAttemptedRef.current) {
             replyAttemptedRef.current = true;
-            generateReply.mutate(undefined, {
-                onSuccess: (data) => {
-                    setAllMessages((prev) => [...prev, data]);
-                },
-                onError: () => {
-                    setAllMessages((prev) => [
-                        ...prev,
-                        {
-                            id: Date.now(),
-                            role: 'assistant' as const,
-                            content: 'Er ging iets mis bij het genereren van een antwoord. Probeer het opnieuw.',
-                            created_at: new Date().toISOString(),
-                        },
-                    ]);
-                },
-            });
+            stream.start();
         }
 
         if (lastMessage?.role === 'assistant') {
             replyAttemptedRef.current = false;
         }
-    }, [allMessages, generateReply.isPending, sendMessage.isPending]);
+    }, [allMessages, stream.isStreaming, sendMessage.isPending]);
 
     const handleScroll = useCallback(() => {
         const container = scrollContainerRef.current;
@@ -144,6 +160,8 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
         });
     }
 
+    const isGenerating = stream.isStreaming || sendMessage.isPending;
+
     return (
         <>
             <Head title={chat.title} />
@@ -164,7 +182,7 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                                 Begin van het gesprek
                             </p>
                         )}
-                        {allMessages.length === 0 && !generateReply.isPending && (
+                        {allMessages.length === 0 && !isGenerating && (
                             <div className="flex h-full items-center justify-center py-20">
                                 <p className="text-muted-foreground">
                                     Start een gesprek door een bericht te
@@ -204,10 +222,23 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                                 </div>
                             </div>
                         ))}
-                        {generateReply.isPending && (
-                            <div className="flex justify-start">
-                                <div className="max-w-[80%] rounded-xl bg-muted px-4 py-2">
-                                    <TypingIndicator />
+                        {stream.isStreaming && (
+                            <div className="space-y-2">
+                                {stream.toolCalls.length > 0 && (
+                                    <ToolCallList toolCalls={stream.toolCalls} />
+                                )}
+                                <div className="flex justify-start">
+                                    <div className="max-w-[80%] rounded-xl bg-muted px-4 py-2">
+                                        {stream.content ? (
+                                            <div className="prose prose-sm dark:prose-invert max-w-none">
+                                                <Markdown remarkPlugins={[remarkGfm]}>
+                                                    {stream.content}
+                                                </Markdown>
+                                            </div>
+                                        ) : (
+                                            <TypingIndicator />
+                                        )}
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -226,13 +257,13 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                             placeholder="Typ een bericht..."
                             autoComplete="off"
                             autoFocus
-                            disabled={sendMessage.isPending || generateReply.isPending}
+                            disabled={isGenerating}
                             className="flex-1"
                         />
                         <Button
                             type="submit"
                             size="icon"
-                            disabled={sendMessage.isPending || generateReply.isPending}
+                            disabled={isGenerating}
                         >
                             {sendMessage.isPending ? (
                                 <Spinner />
@@ -244,6 +275,28 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                 </div>
             </div>
         </>
+    );
+}
+
+function ToolCallList({ toolCalls }: { toolCalls: ToolCallEvent[] }) {
+    return (
+        <div className="flex justify-start">
+            <div className="max-w-[80%] space-y-1 rounded-xl border bg-card px-4 py-3 text-sm">
+                {toolCalls.map((tc, i) => (
+                    <div key={i} className="flex items-center gap-2 text-muted-foreground">
+                        {tc.status === 'running' ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                            <Wrench className="size-3.5" />
+                        )}
+                        <span className="font-mono text-xs">{tc.name}</span>
+                        {tc.status === 'done' && (
+                            <span className="text-xs text-green-600">✓</span>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
     );
 }
 

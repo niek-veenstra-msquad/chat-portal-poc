@@ -35,14 +35,26 @@ class ModelController extends Controller
         $cacheKey = "model_pull:{$model}";
 
         $currentStatus = Cache::get($cacheKey);
-        if ($currentStatus === 'pulling') {
-            return response()->json([
-                'status' => 'pulling',
-                'message' => 'Model wordt al gedownload.',
-            ]);
+        if ($currentStatus) {
+            $data = json_decode($currentStatus, true);
+            if (is_array($data) && ($data['status'] ?? '') === 'pulling') {
+                return response()->json([
+                    'status' => 'pulling',
+                    'message' => 'Model wordt al gedownload.',
+                ]);
+            }
         }
 
-        Cache::put($cacheKey, 'pulling', now()->addMinutes(30));
+        Cache::put($cacheKey, json_encode([
+            'status' => 'pulling',
+            'progress' => 0,
+            'detail' => 'In wachtrij...',
+        ]), now()->addMinutes(30));
+
+        $activePulls = Cache::get('model_pulls_active', []);
+        $activePulls[$model] = true;
+        Cache::put('model_pulls_active', $activePulls, now()->addMinutes(30));
+
         PullOllamaModel::dispatch($model);
 
         return response()->json([
@@ -66,21 +78,12 @@ class ModelController extends Controller
             return response()->json(['status' => 'idle']);
         }
 
-        if ($value === 'pulling') {
-            return response()->json(['status' => 'pulling']);
+        $data = json_decode($value, true);
+
+        if (! is_array($data)) {
+            return response()->json(['status' => 'idle']);
         }
 
-        if ($value === 'success') {
-            return response()->json(['status' => 'success']);
-        }
-
-        if (str_starts_with($value, 'failed:')) {
-            return response()->json([
-                'status' => 'failed',
-                'message' => substr($value, 7),
-            ]);
-        }
-
-        return response()->json(['status' => 'unknown']);
+        return response()->json($data);
     }
 }

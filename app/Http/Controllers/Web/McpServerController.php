@@ -17,6 +17,8 @@ class McpServerController extends Controller
             'type' => $server->type,
             'url' => $server->url,
             'command' => $server->command,
+            'args' => $server->args,
+            'env' => $server->env,
             'description' => $server->description,
             'is_active' => $server->is_active,
         ]);

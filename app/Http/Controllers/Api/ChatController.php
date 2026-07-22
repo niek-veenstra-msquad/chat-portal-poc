@@ -11,10 +11,13 @@ use App\Http\Requests\Api\StoreChatRequest;
 use App\Http\Requests\Api\TogglePinRequest;
 use App\Http\Requests\Api\UpdateChatRequest;
 use App\Models\Chat;
-use App\Services\OllamaService;
 use App\Services\McpClientService;
+use App\Services\OllamaService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Facades\Log;
+use stdClass;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ChatController extends Controller
 {
@@ -63,56 +66,145 @@ class ChatController extends Controller
         ]);
     }
 
-    public function generateReply(GenerateReplyRequest $request, Chat $chat): JsonResponse
+    public function generateReply(GenerateReplyRequest $request, Chat $chat): StreamedResponse
     {
         set_time_limit(300);
 
-        $history = $chat->messages()
-            ->get(['role', 'content'])
-            ->map(fn ($msg) => ['role' => $msg->role, 'content' => $msg->content])
-            ->toArray();
+        return new StreamedResponse(function () use ($chat) {
+            $history = $chat->messages()
+                ->get(['role', 'content'])
+                ->map(fn ($msg) => ['role' => $msg->role, 'content' => $msg->content])
+                ->toArray();
 
-        $mcpTools = $this->mcp->getAvailableTools();
-        $ollamaTools = $this->mcp->toOllamaTools($mcpTools);
+            $mcpTools = $this->mcp->getAvailableTools();
+            $ollamaTools = $this->mcp->toOllamaTools($mcpTools);
 
-        $response = $this->ollama->chat($history, $chat->model, $ollamaTools);
+            $maxIterations = 10;
+            $iteration = 0;
+            $allStreamedContent = '';
 
-        $maxIterations = 10;
-        $iteration = 0;
+            do {
+                $contentChunk = '';
+                $toolCalls = [];
+                $hasError = false;
 
-        while (isset($response['message']['tool_calls']) && $iteration < $maxIterations) {
-            $iteration++;
+                try {
+                    $receivedChunks = false;
 
-            $history[] = $response['message'];
+                    foreach ($this->ollama->chatStream($history, $chat->model, $ollamaTools) as $data) {
+                        $receivedChunks = true;
 
-            foreach ($response['message']['tool_calls'] as $toolCall) {
-                $toolName = $toolCall['function']['name'] ?? '';
-                $toolArgs = $toolCall['function']['arguments'] ?? [];
+                        $token = $data['message']['content'] ?? '';
 
-                $toolResult = $this->mcp->callTool($toolName, $toolArgs);
+                        if ($token !== '') {
+                            $contentChunk .= $token;
+                            $allStreamedContent .= $token;
+                            $this->sendSseEvent('token', ['content' => $token]);
+                        }
 
-                $history[] = [
-                    'role' => 'tool',
-                    'content' => $toolResult['result'] ?? $toolResult['error'] ?? 'No result',
-                ];
+                        if (! empty($data['message']['tool_calls'])) {
+                            array_push($toolCalls, ...$data['message']['tool_calls']);
+                        }
+                    }
+
+                    if (! $receivedChunks) {
+                        Log::warning('Ollama stream returned no data', [
+                            'chat_id' => $chat->id,
+                            'model' => $chat->model,
+                        ]);
+                        $this->sendSseEvent('error', ['message' => 'Ollama gaf geen response.']);
+                        $hasError = true;
+                    }
+                } catch (\Exception $e) {
+                    Log::error('Ollama stream error', [
+                        'error' => $e->getMessage(),
+                        'chat_id' => $chat->id,
+                        'model' => $chat->model,
+                    ]);
+                    $this->sendSseEvent('error', ['message' => 'Fout bij communicatie met Ollama: '.$e->getMessage()]);
+                    $hasError = true;
+                }
+
+                if ($hasError) {
+                    return;
+                }
+
+                if (empty($toolCalls)) {
+                    break;
+                }
+
+                $iteration++;
+
+                if ($iteration > $maxIterations) {
+                    break;
+                }
+
+                $history[] = ['role' => 'assistant', 'content' => $contentChunk, 'tool_calls' => $toolCalls];
+
+                foreach ($toolCalls as $toolCall) {
+                    $toolName = $toolCall['function']['name'] ?? '';
+                    $toolArgs = $toolCall['function']['arguments'] ?? new stdClass;
+
+                    $this->sendSseEvent('tool_start', ['name' => $toolName]);
+
+                    $toolResult = $this->mcp->callTool($toolName, $toolArgs);
+                    $toolResultContent = $toolResult['result'] ?? $toolResult['error'] ?? 'No result';
+
+                    if (! is_string($toolResultContent)) {
+                        $toolResultContent = json_encode($toolResultContent, JSON_UNESCAPED_UNICODE);
+                    }
+
+                    $this->sendSseEvent('tool_end', [
+                        'name' => $toolName,
+                        'result' => mb_substr((string) $toolResultContent, 0, 500),
+                    ]);
+
+                    $history[] = [
+                        'role' => 'tool',
+                        'tool_name' => $toolName,
+                        'content' => (string) $toolResultContent,
+                    ];
+                }
+            } while (true);
+
+            if (empty(trim($allStreamedContent)) && $iteration === 0) {
+                $allStreamedContent = 'Het model gaf geen tekstueel antwoord.';
+                $this->sendSseEvent('token', ['content' => $allStreamedContent]);
             }
 
-            $response = $this->ollama->chat($history, $chat->model, $ollamaTools);
+            if (! empty(trim($allStreamedContent))) {
+                $message = $chat->messages()->create([
+                    'role' => 'assistant',
+                    'content' => $allStreamedContent,
+                ]);
+
+                $this->sendSseEvent('done', [
+                    'id' => $message->id,
+                    'created_at' => $message->created_at->toISOString(),
+                ]);
+            } else {
+                $this->sendSseEvent('done', [
+                    'id' => null,
+                    'created_at' => now()->toISOString(),
+                ]);
+            }
+        }, 200, [
+            'Content-Type' => 'text/event-stream',
+            'Cache-Control' => 'no-cache',
+            'Connection' => 'keep-alive',
+            'X-Accel-Buffering' => 'no',
+        ]);
+    }
+
+    private function sendSseEvent(string $event, array $data): void
+    {
+        echo "event: {$event}\ndata: ".json_encode($data, JSON_UNESCAPED_UNICODE)."\n\n";
+
+        if (ob_get_level()) {
+            ob_flush();
         }
 
-        $content = $response['message']['content'] ?? 'Geen antwoord ontvangen.';
-
-        $message = $chat->messages()->create([
-            'role' => 'assistant',
-            'content' => $content,
-        ]);
-
-        return response()->json([
-            'id' => $message->id,
-            'role' => $message->role,
-            'content' => $message->content,
-            'created_at' => $message->created_at->toISOString(),
-        ]);
+        flush();
     }
 
     public function olderMessages(OlderMessagesRequest $request, Chat $chat): JsonResponse

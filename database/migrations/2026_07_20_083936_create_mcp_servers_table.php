@@ -17,6 +17,8 @@ return new class extends Migration
             $table->string('type')->default('http');
             $table->string('url')->nullable();
             $table->string('command')->nullable();
+            $table->string('args')->nullable();
+            $table->json('env')->nullable();
             $table->text('description')->nullable();
             $table->boolean('is_active')->default(true);
             $table->timestamps();

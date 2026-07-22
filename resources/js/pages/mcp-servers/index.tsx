@@ -33,6 +33,8 @@ interface McpServer {
     type: 'http' | 'stdio';
     url: string | null;
     command: string | null;
+    args: string | null;
+    env: Record<string, string> | null;
     description: string | null;
     is_active: boolean;
 }
@@ -41,18 +43,25 @@ interface PageProps {
     servers: McpServer[];
 }
 
+interface EnvEntry {
+    key: string;
+    value: string;
+}
+
 interface FormState {
     name: string;
     type: 'http' | 'stdio';
     url: string;
     command: string;
+    args: string;
+    env: EnvEntry[];
     description: string;
 }
 
 export default function McpServersIndex({ servers }: PageProps) {
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editingServer, setEditingServer] = useState<McpServer | null>(null);
-    const [form, setForm] = useState<FormState>({ name: '', type: 'http', url: '', command: '', description: '' });
+    const [form, setForm] = useState<FormState>({ name: '', type: 'http', url: '', command: '', args: '', env: [], description: '' });
 
     const createServer = useCreateMcpServer();
     const updateServer = useUpdateMcpServer(editingServer?.id ?? 0);
@@ -61,17 +70,22 @@ export default function McpServersIndex({ servers }: PageProps) {
 
     function openCreate() {
         setEditingServer(null);
-        setForm({ name: '', type: 'http', url: '', command: '', description: '' });
+        setForm({ name: '', type: 'http', url: '', command: '', args: '', env: [], description: '' });
         setDialogOpen(true);
     }
 
     function openEdit(server: McpServer) {
         setEditingServer(server);
+        const envEntries: EnvEntry[] = server.env
+            ? Object.entries(server.env).map(([key, value]) => ({ key, value }))
+            : [];
         setForm({
             name: server.name,
             type: server.type,
             url: server.url ?? '',
             command: server.command ?? '',
+            args: server.args ?? '',
+            env: envEntries,
             description: server.description ?? '',
         });
         setDialogOpen(true);
@@ -108,65 +122,66 @@ export default function McpServersIndex({ servers }: PageProps) {
         <>
             <Head title="MCP Servers" />
             <div className="mx-auto w-full max-w-4xl space-y-6 p-6">
-                <Card>
-                    <CardHeader className="flex flex-row items-center justify-between">
-                        <div>
-                            <CardTitle className="flex items-center gap-2">
-                                <Server className="size-5" />
-                                MCP Servers
-                            </CardTitle>
-                            <CardDescription>
-                                Beheer externe MCP servers voor tool calling.
-                            </CardDescription>
-                        </div>
-                        <Button onClick={openCreate}>
-                            <Plus className="mr-2 size-4" />
-                            Server toevoegen
-                        </Button>
-                    </CardHeader>
-                    <CardContent>
-                        {servers.length === 0 ? (
-                            <p className="py-4 text-sm text-muted-foreground">
-                                Geen MCP servers geconfigureerd. Voeg een server toe om tool calling te gebruiken.
-                            </p>
-                        ) : (
-                            <div className="divide-y">
-                                {servers.map((server) => (
-                                    <div key={server.id} className="flex items-center justify-between py-4">
-                                        <div className="min-w-0 flex-1">
-                                            <div className="flex items-center gap-2">
-                                                <p className="font-medium">{server.name}</p>
-                                                <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${server.is_active ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
-                                                    {server.is_active ? 'Actief' : 'Inactief'}
-                                                </span>
-                                                <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                                                    {server.type === 'http' ? 'HTTP' : 'Stdio'}
-                                                </span>
-                                            </div>
-                                            <p className="truncate text-sm text-muted-foreground">
-                                                {server.type === 'http' ? server.url : server.command}
-                                            </p>
-                                            {server.description && (
-                                                <p className="mt-1 text-sm text-muted-foreground">{server.description}</p>
-                                            )}
+                <div className="flex items-center justify-between">
+                    <div>
+                        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+                            <Server className="size-5" />
+                            MCP Servers
+                        </h1>
+                        <p className="text-sm text-muted-foreground">
+                            Beheer externe MCP servers voor tool calling.
+                        </p>
+                    </div>
+                    <Button onClick={openCreate}>
+                        <Plus className="mr-2 size-4" />
+                        Server toevoegen
+                    </Button>
+                </div>
+
+                {servers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                        Geen MCP servers geconfigureerd. Voeg een server toe om tool calling te gebruiken.
+                    </p>
+                ) : (
+                    <div className="grid gap-4">
+                        {servers.map((server) => (
+                            <Card key={server.id}>
+                                <CardHeader className="flex flex-row items-start justify-between pb-3">
+                                    <div className="min-w-0 flex-1 space-y-1">
+                                        <div className="flex items-center gap-2">
+                                            <CardTitle className="text-base">{server.name}</CardTitle>
+                                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${server.is_active ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
+                                                {server.is_active ? 'Actief' : 'Inactief'}
+                                            </span>
+                                            <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                                                {server.type === 'http' ? 'HTTP' : 'Stdio'}
+                                            </span>
                                         </div>
-                                        <div className="ml-4 flex items-center gap-1">
-                                            <Button variant="ghost" size="icon" onClick={() => handleToggleActive(server)} title={server.is_active ? 'Deactiveren' : 'Activeren'}>
-                                                {server.is_active ? <PowerOff className="size-4" /> : <Power className="size-4" />}
-                                            </Button>
-                                            <Button variant="ghost" size="icon" onClick={() => openEdit(server)}>
-                                                <Pencil className="size-4" />
-                                            </Button>
-                                            <Button variant="ghost" size="icon" className="text-destructive" onClick={() => handleDelete(server)}>
-                                                <Trash2 className="size-4" />
-                                            </Button>
-                                        </div>
+                                        <CardDescription className="truncate">
+                                            {server.type === 'http' ? server.url : `${server.command} ${server.args ?? ''}`.trim()}
+                                        </CardDescription>
                                     </div>
-                                ))}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
+                                    <div className="ml-4 flex items-center gap-1">
+                                        <Button variant="ghost" size="icon" onClick={() => handleToggleActive(server)} title={server.is_active ? 'Deactiveren' : 'Activeren'}>
+                                            {server.is_active ? <PowerOff className="size-4" /> : <Power className="size-4" />}
+                                        </Button>
+                                        <Button variant="ghost" size="icon" onClick={() => openEdit(server)}>
+                                            <Pencil className="size-4" />
+                                        </Button>
+                                        <Button variant="ghost" size="icon" className="text-destructive" onClick={() => handleDelete(server)}>
+                                            <Trash2 className="size-4" />
+                                        </Button>
+                                    </div>
+                                </CardHeader>
+                                {server.description && (
+                                    <CardContent className="pt-0">
+                                        <p className="text-sm text-muted-foreground">{server.description}</p>
+                                    </CardContent>
+                                )}
+                            </Card>
+                        ))}
+                    </div>
+                )}
             </div>
 
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -213,16 +228,82 @@ export default function McpServersIndex({ servers }: PageProps) {
                             </div>
                         )}
                         {form.type === 'stdio' && (
-                            <div className="space-y-2">
-                                <Label htmlFor="server-command">Command</Label>
-                                <Input
-                                    id="server-command"
-                                    value={form.command}
-                                    onChange={(e) => setForm({ ...form, command: e.target.value })}
-                                    placeholder="npx @modelcontextprotocol/server-filesystem /path"
-                                    disabled={isSubmitting}
-                                />
-                            </div>
+                            <>
+                                <div className="space-y-2">
+                                    <Label htmlFor="server-command">Command</Label>
+                                    <Input
+                                        id="server-command"
+                                        value={form.command}
+                                        onChange={(e) => setForm({ ...form, command: e.target.value })}
+                                        placeholder="npx"
+                                        disabled={isSubmitting}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label htmlFor="server-args">Arguments</Label>
+                                    <Input
+                                        id="server-args"
+                                        value={form.args}
+                                        onChange={(e) => setForm({ ...form, args: e.target.value })}
+                                        placeholder="@modelcontextprotocol/server-filesystem /tmp"
+                                        disabled={isSubmitting}
+                                    />
+                                    <p className="text-xs text-muted-foreground">Gescheiden door spaties</p>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Environment Variables (optioneel)</Label>
+                                    <div className="space-y-2">
+                                        {form.env.map((entry, index) => (
+                                            <div key={index} className="flex items-center gap-2">
+                                                <Input
+                                                    value={entry.key}
+                                                    onChange={(e) => {
+                                                        const newEnv = [...form.env];
+                                                        newEnv[index] = { ...newEnv[index], key: e.target.value };
+                                                        setForm({ ...form, env: newEnv });
+                                                    }}
+                                                    placeholder="KEY"
+                                                    disabled={isSubmitting}
+                                                    className="flex-1"
+                                                />
+                                                <Input
+                                                    value={entry.value}
+                                                    onChange={(e) => {
+                                                        const newEnv = [...form.env];
+                                                        newEnv[index] = { ...newEnv[index], value: e.target.value };
+                                                        setForm({ ...form, env: newEnv });
+                                                    }}
+                                                    placeholder="value"
+                                                    disabled={isSubmitting}
+                                                    className="flex-1"
+                                                />
+                                                <Button
+                                                    type="button"
+                                                    variant="ghost"
+                                                    size="icon"
+                                                    onClick={() => {
+                                                        const newEnv = form.env.filter((_, i) => i !== index);
+                                                        setForm({ ...form, env: newEnv });
+                                                    }}
+                                                    disabled={isSubmitting}
+                                                >
+                                                    <Trash2 className="size-4" />
+                                                </Button>
+                                            </div>
+                                        ))}
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={() => setForm({ ...form, env: [...form.env, { key: '', value: '' }] })}
+                                            disabled={isSubmitting}
+                                        >
+                                            <Plus className="mr-2 size-3" />
+                                            Variabele toevoegen
+                                        </Button>
+                                    </div>
+                                </div>
+                            </>
                         )}
                         <div className="space-y-2">
                             <Label htmlFor="server-description">Beschrijving (optioneel)</Label>

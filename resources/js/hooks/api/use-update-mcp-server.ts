@@ -6,6 +6,8 @@ interface UpdateMcpServerPayload {
     type: 'http' | 'stdio';
     url: string;
     command: string;
+    args: string;
+    env: { key: string; value: string }[];
     description: string;
 }
 
