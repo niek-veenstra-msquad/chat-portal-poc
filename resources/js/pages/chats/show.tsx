@@ -193,7 +193,7 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                             message.role === 'user' ? (
                                 <div key={message.id} className="flex justify-end">
                                     <div className="max-w-[80%] rounded-xl bg-sidebar px-4 py-2 text-white">
-                                        <p className="whitespace-pre-wrap text-sm">
+                                        <p className="whitespace-pre-wrap">
                                             {message.content}
                                         </p>
                                     </div>
