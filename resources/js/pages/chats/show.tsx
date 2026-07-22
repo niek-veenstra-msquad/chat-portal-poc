@@ -1,15 +1,14 @@
 import { Head } from '@inertiajs/react';
 import { Loader2, Send, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Markdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Streamdown } from 'streamdown';
+import { code } from '@streamdown/code';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { useStreamReply, type ToolCallEvent } from '@/hooks/api/use-generate-reply';
 import { useOlderMessages } from '@/hooks/api/use-older-messages';
 import { useSendMessage } from '@/hooks/api/use-send-message';
-import { cn } from '@/lib/utils';
 
 interface Message {
     id: number;
@@ -190,56 +189,35 @@ export default function ChatShow({ chat, messages: initialMessages, hasMore: ini
                                 </p>
                             </div>
                         )}
-                        {allMessages.map((message) => (
-                            <div
-                                key={message.id}
-                                className={cn(
-                                    'flex',
-                                    message.role === 'user'
-                                        ? 'justify-end'
-                                        : 'justify-start',
-                                )}
-                            >
-                                <div
-                                    className={cn(
-                                        'max-w-[80%] rounded-xl px-4 py-2',
-                                        message.role === 'user'
-                                            ? 'bg-primary text-primary-foreground'
-                                            : 'bg-muted',
-                                    )}
-                                >
-                                    {message.role === 'user' ? (
+                        {allMessages.map((message) =>
+                            message.role === 'user' ? (
+                                <div key={message.id} className="flex justify-end">
+                                    <div className="max-w-[80%] rounded-xl bg-sidebar px-4 py-2 text-white">
                                         <p className="whitespace-pre-wrap text-sm">
                                             {message.content}
                                         </p>
-                                    ) : (
-                                        <div className="prose prose-sm dark:prose-invert max-w-none">
-                                            <Markdown remarkPlugins={[remarkGfm]}>
-                                                {message.content}
-                                            </Markdown>
-                                        </div>
-                                    )}
+                                    </div>
                                 </div>
-                            </div>
-                        ))}
+                            ) : (
+                                <div key={message.id}>
+                                    <Streamdown mode="static" plugins={{ code }}>
+                                        {message.content}
+                                    </Streamdown>
+                                </div>
+                            ),
+                        )}
                         {stream.isStreaming && (
-                            <div className="space-y-2">
+                            <div className="space-y-4">
                                 {stream.toolCalls.length > 0 && (
                                     <ToolCallList toolCalls={stream.toolCalls} />
                                 )}
-                                <div className="flex justify-start">
-                                    <div className="max-w-[80%] rounded-xl bg-muted px-4 py-2">
-                                        {stream.content ? (
-                                            <div className="prose prose-sm dark:prose-invert max-w-none">
-                                                <Markdown remarkPlugins={[remarkGfm]}>
-                                                    {stream.content}
-                                                </Markdown>
-                                            </div>
-                                        ) : (
-                                            <TypingIndicator />
-                                        )}
-                                    </div>
-                                </div>
+                                {stream.content ? (
+                                    <Streamdown mode="streaming" isAnimating animated plugins={{ code }}>
+                                        {stream.content}
+                                    </Streamdown>
+                                ) : (
+                                    <TypingIndicator />
+                                )}
                             </div>
                         )}
                         <div ref={messagesEndRef} />
