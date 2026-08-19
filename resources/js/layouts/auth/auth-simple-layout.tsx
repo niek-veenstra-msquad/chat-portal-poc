@@ -1,5 +1,6 @@
 import { Link } from '@inertiajs/react';
 import AppLogoIcon from '@/components/app-logo-icon';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { home } from '@/routes';
 import type { AuthLayoutProps } from '@/types';
 
@@ -23,14 +24,16 @@ export default function AuthSimpleLayout({
                             <span className="sr-only">{title}</span>
                         </Link>
 
-                        <div className="space-y-2 text-center">
-                            <h1 className="text-xl font-medium">{title}</h1>
-                            <p className="text-center text-sm text-muted-foreground">
-                                {description}
-                            </p>
-                        </div>
                     </div>
-                    {children}
+                    <Card>
+                        <CardHeader className="text-center">
+                            <CardTitle className="text-xl">{title}</CardTitle>
+                            <CardDescription>{description}</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            {children}
+                        </CardContent>
+                    </Card>
                 </div>
             </div>
         </div>

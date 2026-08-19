@@ -11,6 +11,7 @@ use App\Http\Requests\Api\StoreChatRequest;
 use App\Http\Requests\Api\TogglePinRequest;
 use App\Http\Requests\Api\UpdateChatRequest;
 use App\Models\Chat;
+use App\Models\ToolExecution;
 use App\Services\McpClientService;
 use App\Services\OllamaService;
 use Illuminate\Http\JsonResponse;
@@ -80,8 +81,10 @@ class ChatController extends Controller
             $ollamaTools = $this->mcp->toOllamaTools($mcpTools);
 
             $maxIterations = 10;
+            $maxToolRetries = 3;
             $iteration = 0;
             $allStreamedContent = '';
+            $toolFailures = [];
 
             do {
                 $contentChunk = '';
@@ -136,27 +139,67 @@ class ChatController extends Controller
                 $iteration++;
 
                 if ($iteration > $maxIterations) {
+                    Log::warning('Tool call loop hit max iterations', ['chat_id' => $chat->id]);
                     break;
                 }
 
                 $history[] = ['role' => 'assistant', 'content' => $contentChunk, 'tool_calls' => $toolCalls];
 
+                $allToolsExhausted = true;
+
                 foreach ($toolCalls as $toolCall) {
                     $toolName = $toolCall['function']['name'] ?? '';
                     $toolArgs = $toolCall['function']['arguments'] ?? new stdClass;
 
+                    $failureCount = $toolFailures[$toolName] ?? 0;
+
+                    if ($failureCount >= $maxToolRetries) {
+                        $history[] = [
+                            'role' => 'tool',
+                            'tool_name' => $toolName,
+                            'content' => "Tool '{$toolName}' is niet beschikbaar na {$maxToolRetries} mislukte pogingen. Beantwoord de vraag zonder deze tool.",
+                        ];
+
+                        continue;
+                    }
+
+                    $allToolsExhausted = false;
+
                     $this->sendSseEvent('tool_start', ['name' => $toolName]);
 
+                    $toolExecution = ToolExecution::create([
+                        'chat_id' => $chat->id,
+                        'tool_name' => $toolName,
+                        'status' => 'running',
+                    ]);
+
                     $toolResult = $this->mcp->callTool($toolName, $toolArgs);
+                    $isError = isset($toolResult['error']);
                     $toolResultContent = $toolResult['result'] ?? $toolResult['error'] ?? 'No result';
 
                     if (! is_string($toolResultContent)) {
                         $toolResultContent = json_encode($toolResultContent, JSON_UNESCAPED_UNICODE);
                     }
 
+                    if ($isError) {
+                        $toolFailures[$toolName] = $failureCount + 1;
+
+                        Log::warning('Tool call failed', [
+                            'tool' => $toolName,
+                            'attempt' => $failureCount + 1,
+                            'max_retries' => $maxToolRetries,
+                            'chat_id' => $chat->id,
+                        ]);
+                    }
+
+                    $toolExecution->update([
+                        'status' => $isError ? 'error' : 'done',
+                        'result' => $toolResultContent,
+                    ]);
+
                     $this->sendSseEvent('tool_end', [
                         'name' => $toolName,
-                        'result' => mb_substr((string) $toolResultContent, 0, 500),
+                        'result' => $toolResultContent
                     ]);
 
                     $history[] = [
@@ -164,6 +207,11 @@ class ChatController extends Controller
                         'tool_name' => $toolName,
                         'content' => (string) $toolResultContent,
                     ];
+                }
+
+                if ($allToolsExhausted) {
+                    Log::warning('All requested tools exhausted retries', ['chat_id' => $chat->id]);
+                    break;
                 }
             } while (true);
 
@@ -177,6 +225,10 @@ class ChatController extends Controller
                     'role' => 'assistant',
                     'content' => $allStreamedContent,
                 ]);
+
+                $chat->toolExecutions()
+                    ->whereNull('chat_message_id')
+                    ->update(['chat_message_id' => $message->id]);
 
                 $this->sendSseEvent('done', [
                     'id' => $message->id,

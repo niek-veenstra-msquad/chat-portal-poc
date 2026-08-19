@@ -20,6 +20,11 @@ class Chat extends Model
         return $this->hasMany(ChatMessage::class)->orderBy('created_at');
     }
 
+    public function toolExecutions(): HasMany
+    {
+        return $this->hasMany(ToolExecution::class)->orderBy('created_at');
+    }
+
     public function scopePinnedFirst($query)
     {
         return $query->orderByRaw('pinned_at IS NULL ASC, pinned_at DESC');

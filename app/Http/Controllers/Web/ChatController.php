@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Web;
 
 use App\DTO\ChatData;
 use App\DTO\ChatMessageData;
+use App\DTO\ToolExecutionData;
 use App\Http\Controllers\Controller;
 use App\Models\Chat;
 use Inertia\Inertia;
@@ -27,10 +28,13 @@ class ChatController extends Controller
             ->oldest('id')
             ->get();
 
+        $toolExecutions = $chat->toolExecutions()->get();
+
         return Inertia::render('chats/show', [
             'chat' => ChatData::fromModel($chat),
             'messages' => $messages->map(ChatMessageData::fromModel(...))->values(),
             'hasMore' => $chat->messages()->count() > self::MESSAGES_PER_PAGE,
+            'toolExecutions' => $toolExecutions->map(ToolExecutionData::fromModel(...))->values(),
         ]);
     }
 }

@@ -40,7 +40,7 @@ class OllamaService
         $response = $client->post("{$this->baseUrl}/api/chat", [
             'json' => $payload,
             'stream' => true,
-            'timeout' => 240,
+            'timeout' => 600,
         ]);
 
         $body = $response->getBody();

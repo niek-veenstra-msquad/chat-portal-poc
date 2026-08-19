@@ -2,10 +2,11 @@ import { closestCenter, DndContext, DragEndEvent, KeyboardSensor, PointerSensor,
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Deferred, Head, router } from '@inertiajs/react';
-import { Download, GripVertical, HardDrive, Loader2, Wrench } from 'lucide-react';
+import { ChevronDown, ChevronRight, Download, GripVertical, HardDrive, Loader2, Wrench } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { usePullModel, usePullModelStatus } from '@/hooks/api/use-pull-model';
 import { useUpdateWidgetOrder } from '@/hooks/api/use-update-widget-order';
@@ -276,7 +277,11 @@ function ModelList({ models }: { models: { name: string; size: string; modified_
     );
 }
 
+const MCP_VISIBLE_LIMIT = 5;
+
 function McpToolList({ tools }: { tools: { name: string; description: string; server: string }[] }) {
+    const [isOpen, setIsOpen] = useState(false);
+
     if (tools.length === 0) {
         return (
             <p className="py-4 text-sm text-muted-foreground">
@@ -285,21 +290,98 @@ function McpToolList({ tools }: { tools: { name: string; description: string; se
         );
     }
 
+    const grouped = tools.reduce<Record<string, { name: string; description: string }[]>>((acc, tool) => {
+        if (!acc[tool.server]) acc[tool.server] = [];
+        acc[tool.server].push({ name: tool.name, description: tool.description });
+        return acc;
+    }, {});
+
+    const servers = Object.keys(grouped);
+    const totalTools = tools.length;
+    const visibleTools = tools.slice(0, MCP_VISIBLE_LIMIT);
+    const hasMore = totalTools > MCP_VISIBLE_LIMIT;
+
+    if (!hasMore) {
+        return (
+            <div className="space-y-3 pt-2">
+                {servers.map((server) => (
+                    <McpServerGroup key={server} server={server} tools={grouped[server]} />
+                ))}
+            </div>
+        );
+    }
+
+    let visibleCount = 0;
+    const visibleServers: { server: string; tools: { name: string; description: string }[]; partial: boolean }[] = [];
+    const hiddenServers: { server: string; tools: { name: string; description: string }[] }[] = [];
+
+    for (const server of servers) {
+        const serverTools = grouped[server];
+        if (visibleCount >= MCP_VISIBLE_LIMIT) {
+            hiddenServers.push({ server, tools: serverTools });
+        } else if (visibleCount + serverTools.length <= MCP_VISIBLE_LIMIT) {
+            visibleServers.push({ server, tools: serverTools, partial: false });
+            visibleCount += serverTools.length;
+        } else {
+            const remaining = MCP_VISIBLE_LIMIT - visibleCount;
+            visibleServers.push({ server, tools: serverTools.slice(0, remaining), partial: true });
+            hiddenServers.push({ server, tools: serverTools.slice(remaining) });
+            visibleCount = MCP_VISIBLE_LIMIT;
+        }
+    }
+
+    const hiddenCount = totalTools - MCP_VISIBLE_LIMIT;
+
     return (
-        <div className="divide-y">
-            {tools.map((tool) => (
-                <div key={`${tool.server}-${tool.name}`} className="py-3">
-                    <div className="flex items-center gap-2">
-                        <p className="font-medium">{tool.name}</p>
-                        <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                            {tool.server}
-                        </span>
-                    </div>
-                    {tool.description && (
-                        <p className="mt-0.5 text-sm text-muted-foreground">{tool.description}</p>
-                    )}
-                </div>
+        <div className="space-y-3 pt-2">
+            {visibleServers.map(({ server, tools: serverTools }) => (
+                <McpServerGroup key={server} server={server} tools={serverTools} />
             ))}
+            <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+                <CollapsibleContent>
+                    <div className="space-y-3">
+                        {hiddenServers.map(({ server, tools: serverTools }) => (
+                            <McpServerGroup key={server} server={server} tools={serverTools} />
+                        ))}
+                    </div>
+                </CollapsibleContent>
+                <CollapsibleTrigger asChild>
+                    <Button variant="ghost" size="sm" className="mt-1 h-7 px-2 text-xs text-muted-foreground">
+                        {isOpen ? (
+                            <>
+                                <ChevronDown className="mr-1 size-3" />
+                                Minder tonen
+                            </>
+                        ) : (
+                            <>
+                                <ChevronRight className="mr-1 size-3" />
+                                +{hiddenCount} meer tonen
+                            </>
+                        )}
+                    </Button>
+                </CollapsibleTrigger>
+            </Collapsible>
+        </div>
+    );
+}
+
+function McpServerGroup({ server, tools }: { server: string; tools: { name: string; description: string }[] }) {
+    return (
+        <div>
+            <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+                {server}
+            </span>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+                {tools.map((tool) => (
+                    <span
+                        key={tool.name}
+                        title={tool.description}
+                        className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted/80"
+                    >
+                        {tool.name}
+                    </span>
+                ))}
+            </div>
         </div>
     );
 }

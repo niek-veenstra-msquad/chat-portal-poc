@@ -1,8 +1,9 @@
-import { Head, router } from '@inertiajs/react';
-import { Pencil, Plus, Power, PowerOff, Server, Trash2 } from 'lucide-react';
+import { Deferred, Head, router } from '@inertiajs/react';
+import { ChevronDown, ChevronRight, Loader2, Pencil, Plus, Power, PowerOff, Server, Trash2, Wrench } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
     Dialog,
     DialogContent,
@@ -39,8 +40,19 @@ interface McpServer {
     is_active: boolean;
 }
 
+interface McpToolInfo {
+    name: string;
+    description: string;
+}
+
+interface DeferredResult<T> {
+    data: T;
+    error: string | null;
+}
+
 interface PageProps {
     servers: McpServer[];
+    serverTools?: DeferredResult<Record<number, McpToolInfo[]>>;
 }
 
 interface EnvEntry {
@@ -58,7 +70,7 @@ interface FormState {
     description: string;
 }
 
-export default function McpServersIndex({ servers }: PageProps) {
+export default function McpServersIndex({ servers, serverTools }: PageProps) {
     const [dialogOpen, setDialogOpen] = useState(false);
     const [editingServer, setEditingServer] = useState<McpServer | null>(null);
     const [form, setForm] = useState<FormState>({ name: '', type: 'http', url: '', command: '', args: '', env: [], description: '' });
@@ -178,6 +190,21 @@ export default function McpServersIndex({ servers }: PageProps) {
                                         <p className="text-sm text-muted-foreground">{server.description}</p>
                                     </CardContent>
                                 )}
+                                <Deferred data={['serverTools']} fallback={
+                                    <CardContent className={server.description ? '' : 'pt-0'}>
+                                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                                            <Loader2 className="size-3 animate-spin" />
+                                            Tools laden...
+                                        </div>
+                                    </CardContent>
+                                }>
+                                    <ServerToolsList
+                                        tools={serverTools?.data?.[server.id] ?? []}
+                                        hasDescription={!!server.description}
+                                        isActive={server.is_active}
+                                        error={serverTools?.error ?? null}
+                                    />
+                                </Deferred>
                             </Card>
                         ))}
                     </div>
@@ -325,6 +352,94 @@ export default function McpServersIndex({ servers }: PageProps) {
                 </DialogContent>
             </Dialog>
         </>
+    );
+}
+
+const VISIBLE_TOOLS_LIMIT = 5;
+
+function ServerToolsList({ tools, hasDescription, isActive, error }: { tools: McpToolInfo[]; hasDescription: boolean; isActive: boolean; error: string | null }) {
+    const [isOpen, setIsOpen] = useState(false);
+
+    if (error) {
+        return (
+            <CardContent className={hasDescription ? '' : 'pt-0'}>
+                <p className="text-xs text-destructive">{error}</p>
+            </CardContent>
+        );
+    }
+
+    if (!isActive) {
+        return (
+            <CardContent className={hasDescription ? '' : 'pt-0'}>
+                <p className="text-xs text-muted-foreground">Activeer deze server om tools te zien.</p>
+            </CardContent>
+        );
+    }
+
+    if (tools.length === 0) {
+        return (
+            <CardContent className={hasDescription ? '' : 'pt-0'}>
+                <p className="text-xs text-muted-foreground">Geen tools beschikbaar.</p>
+            </CardContent>
+        );
+    }
+
+    const visibleTools = tools.slice(0, VISIBLE_TOOLS_LIMIT);
+    const hiddenTools = tools.slice(VISIBLE_TOOLS_LIMIT);
+    const hasMore = hiddenTools.length > 0;
+
+    return (
+        <CardContent className={hasDescription ? '' : 'pt-0'}>
+            <div className="space-y-1">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                    <Wrench className="size-3" />
+                    {tools.length} {tools.length === 1 ? 'tool' : 'tools'}
+                </div>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                    {visibleTools.map((tool) => (
+                        <span
+                            key={tool.name}
+                            title={tool.description}
+                            className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted/80"
+                        >
+                            {tool.name}
+                        </span>
+                    ))}
+                </div>
+                {hasMore && (
+                    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+                        <CollapsibleContent>
+                            <div className="flex flex-wrap gap-1.5 pt-1.5">
+                                {hiddenTools.map((tool) => (
+                                    <span
+                                        key={tool.name}
+                                        title={tool.description}
+                                        className="inline-flex items-center rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted/80"
+                                    >
+                                        {tool.name}
+                                    </span>
+                                ))}
+                            </div>
+                        </CollapsibleContent>
+                        <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm" className="mt-1 h-6 px-2 text-xs text-muted-foreground">
+                                {isOpen ? (
+                                    <>
+                                        <ChevronDown className="mr-1 size-3" />
+                                        Minder tonen
+                                    </>
+                                ) : (
+                                    <>
+                                        <ChevronRight className="mr-1 size-3" />
+                                        +{hiddenTools.length} meer tonen
+                                    </>
+                                )}
+                            </Button>
+                        </CollapsibleTrigger>
+                    </Collapsible>
+                )}
+            </div>
+        </CardContent>
     );
 }
 
